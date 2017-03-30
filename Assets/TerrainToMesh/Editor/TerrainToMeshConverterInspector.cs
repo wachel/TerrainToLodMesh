@@ -22,10 +22,10 @@ namespace TerrainConverter
                 int gridNum = (converter.terrain.terrainData.heightmapWidth - 1) / converter.gridSize;
 
                 if (GUILayout.Button("生成分层网格")) {
-                    converter.trees = new LodNodeTree[converter.lodLevel];
-                    for (int i= 0; i<converter.lodLevel; i++) {
+                    converter.trees = new LodNodeTree[converter.maxLodLevel + 1];
+                    for (int i= 0; i<=converter.maxLodLevel; i++) {
                         converter.trees[i] = new LodNodeTree();
-                        float error = converter.minError * Mathf.Pow(Mathf.Pow(converter.maxError / converter.minError, 1.0f / (converter.lodLevel - 1)), i);
+                        float error = converter.minError * Mathf.Pow(Mathf.Pow(converter.maxError / converter.minError, 1.0f / (converter.maxLodLevel - 1)), i);
                         Node tempNode = CreateNode(error);
                         List<byte> bytes = new List<byte>();
                         tempNode.ToBytes(bytes);
@@ -33,36 +33,45 @@ namespace TerrainConverter
                         converter.trees[i].alphaLayers = tempNode.GetAlphaBytes();
                     }
 
-                    Node node = new Node(0, 0, converter.terrain.terrainData.heightmapWidth - 1);
-                    node.CreateChildFromBytes(converter.trees[0].tree);
-                    node.SetAlphaBytes(converter.trees[0].alphaLayers);
+                    Node[] nodes = new Node[converter.maxLodLevel + 1];
+                    for(int i= 0; i <= converter.maxLodLevel; i++) {
+                        //Node node = new Node(0, 0, converter.terrain.terrainData.heightmapWidth - 1);
+                        //node.CreateChildFromBytes(converter.trees[0].tree);
+                        //node.SetAlphaBytes(converter.trees[0].alphaLayers);
+
+                        float error = converter.minError * Mathf.Pow(Mathf.Pow(converter.maxError / converter.minError, 1.0f / (converter.maxLodLevel - 1)), i);
+                        Node tempNode = CreateNode(error);
+                        nodes[i] = tempNode;
+                    }
 
                     var children = new List<GameObject>();
                     foreach (Transform child in converter.transform) children.Add(child.gameObject);
                     children.ForEach(child => DestroyImmediate(child));
 
-                    List<MeshInfo>[,] meshes = new List<MeshInfo>[gridNum, gridNum];
-                    for (int i = 0; i < gridNum; i++) {
-                        for (int j = 0; j < gridNum; j++) {
-                            meshes[i, j] = new List<MeshInfo>();
-                        }
-                    }
-
-                    {
-                        List<MeshInfo> ms = converter.CreateMeshes(node, converter.gridSize, -1);
-                        foreach (MeshInfo m in ms) {
-                            meshes[m.gridX, m.gridY].Add(m);
-                        }
-                    }
-
-                    for (int l = 0; l < converter.terrain.terrainData.alphamapLayers; l++) {
-                        List<MeshInfo> ms = converter.CreateMeshes(node, converter.gridSize, l);
-                        foreach (MeshInfo m in ms) {
-                            meshes[m.gridX, m.gridY].Add(m);
-                        }
-                    }
-
-                    converter.CreateObjects(meshes);
+                    converter.CreateGridObjects(nodes);
+                    
+                    //List<MeshInfo>[,] meshes = new List<MeshInfo>[gridNum, gridNum];
+                    //for (int i = 0; i < gridNum; i++) {
+                    //    for (int j = 0; j < gridNum; j++) {
+                    //        meshes[i, j] = new List<MeshInfo>();
+                    //    }
+                    //}
+                    //
+                    //{
+                    //    List<MeshInfo> ms = TerrainToMeshTool.CreateMeshes(node, converter.terrain.terrainData, converter.gridSize, -1);
+                    //    foreach (MeshInfo m in ms) {
+                    //        meshes[m.gridX, m.gridY].Add(m);
+                    //    }
+                    //}
+                    //
+                    //for (int l = 0; l < converter.terrain.terrainData.alphamapLayers; l++) {
+                    //    List<MeshInfo> ms = TerrainToMeshTool.CreateMeshes(node,converter.terrain.terrainData,converter.gridSize, l);
+                    //    foreach (MeshInfo m in ms) {
+                    //        meshes[m.gridX, m.gridY].Add(m);
+                    //    }
+                    //}
+                    //
+                    //TerrainToMeshTool.CreateObjects(converter.terrain.terrainData,converter.transform, meshes);
                 }
                 GUILayout.EndHorizontal();
             }
@@ -195,20 +204,20 @@ namespace TerrainConverter
             root.PreorderTraversal((Node node) => {
                 if (node.childs != null) {
                     //x - 1
-                    if (node.childs[0].childs == null && node.childs[2].childs == null && converter.IsSizeLeaf(root, node.x - 1, node.y, node.size)) {
+                    if (node.childs[0].childs == null && node.childs[2].childs == null && TerrainToMeshTool.IsSizeLeaf(root, node.x - 1, node.y, node.size)) {
                         node.mergeTriangle |= 1 << 1;
                     }
                     //y - 1
-                    if (node.childs[0].childs == null && node.childs[1].childs == null && converter.IsSizeLeaf(root, node.x, node.y - 1, node.size)) {
+                    if (node.childs[0].childs == null && node.childs[1].childs == null && TerrainToMeshTool.IsSizeLeaf(root, node.x, node.y - 1, node.size)) {
                         node.mergeTriangle |= 1 << 0;
                     }
 
                     //x + 1
-                    if (node.childs[1].childs == null && node.childs[3].childs == null && converter.IsSizeLeaf(root, node.x + node.size + 1, node.y, node.size)) {
+                    if (node.childs[1].childs == null && node.childs[3].childs == null && TerrainToMeshTool.IsSizeLeaf(root, node.x + node.size + 1, node.y, node.size)) {
                         node.mergeTriangle |= 1 << 3;
                     }
                     //y + 1
-                    if (node.childs[2].childs == null && node.childs[3].childs == null && converter.IsSizeLeaf(root, node.x, node.y + node.size + 1, node.size)) {
+                    if (node.childs[2].childs == null && node.childs[3].childs == null && TerrainToMeshTool.IsSizeLeaf(root, node.x, node.y + node.size + 1, node.size)) {
                         node.mergeTriangle |= 1 << 2;
                     }
                 }
