@@ -35,6 +35,7 @@ namespace TerrainConverter
         }
         public int[] validNums;
         public bool swapEdge;
+        public float error;//合并网格从子节点收集的误差
         public Node[] childs = null;
 
         //记录那些边要被擦掉
@@ -42,11 +43,19 @@ namespace TerrainConverter
         //1 + 3
         //+-0-+
         public byte mergeTriangle;
+        public byte dynamicMergeTriangle;
+        public byte skirts;
 
         //2 6 3
         //5 8 7
         //0 4 1
         public int[] vertexIndices = new int[9];
+
+        //  45 
+        //3 ** 6
+        //2 ** 7
+        //  10
+        public int[] skirtsIndices = new int[8];
 
         public void PostorderTraversal(System.Action<Node> fun)
         {
@@ -78,13 +87,13 @@ namespace TerrainConverter
                 fun(this);
             }
         }
-        public Node FindNode(int fx, int fy)
+        public Node FindLeaf(int fx, int fy)
         {
             if (childs == null) {
                 return this;
             } else {
-                int index = (fy < y + size / 2.0f ? 0 : 2) + (fx < x + size / 2.0f ? 0 : 1);
-                return childs[index].FindNode(fx, fy);
+                int index = (fy < y + size / 2 ? 0 : 2) + (fx < x + size / 2 ? 0 : 1);
+                return childs[index].FindLeaf(fx, fy);
             }
         }
         public Node FindSizeNode(int fx, int fy, int fsize)
@@ -93,10 +102,11 @@ namespace TerrainConverter
                 return this;
             } else if (fsize < size) {
                 int index = (fy < y + size / 2 ? 0 : 2) + (fx < x + size / 2 ? 0 : 1);
-                if(childs== null || childs[index] == null) {
+                if (childs == null || childs[index] == null) {
                     int a = 0;
+                } else {
+                    return childs[index].FindSizeNode(fx, fy, fsize);
                 }
-                return childs[index].FindSizeNode(fx, fy, fsize);
             }
             return null;
         }
@@ -116,12 +126,11 @@ namespace TerrainConverter
             });
         }
 
-        public List<byte>[] GetAlphaBytes()
+        public AlphaLayer[] GetAlphaBytes()
         {
-            List<byte>[] result = new List<byte>[validNums.Length];
+            AlphaLayer[] result = new AlphaLayer[validNums.Length];
             for (int layer = 0; layer < validNums.Length; layer++) {
-                result[layer] = new List<byte>();
-                List<byte> bytes = result[layer];
+                List<byte> bytes = new List<byte>();
                 PreorderTraversal((Node node) => {
                     if (node.childs != null) {
                         byte flag = 0;
@@ -135,6 +144,8 @@ namespace TerrainConverter
                         bytes.Add(flag);
                     }
                 });
+                result[layer] = new AlphaLayer();
+                result[layer].bytes = bytes;
             }
             return result;
         }
@@ -166,14 +177,14 @@ namespace TerrainConverter
             CreateChildFromBytes(bytes, ref startInde);
         }
 
-        public void SetAlphaBytes(List<byte>[] layerBytes)
+        public void SetAlphaBytes(AlphaLayer[] layerBytes)
         {
             PreorderTraversal((Node node) => {
                 node.validNums = new int[layerBytes.Length];
             });
 
             for (int layer = 0; layer < layerBytes.Length; layer++) {
-                List<byte> bytes = layerBytes[layer];
+                List<byte> bytes = layerBytes[layer].bytes;
                 int index = 0;
                 PreorderTraversal((Node node) => {
                     if (node.childs != null) {
@@ -247,6 +258,7 @@ namespace TerrainConverter
             Texture2D result = new Texture2D(rt.width, rt.height, TextureFormat.RGB24, true);
             result.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0);
             result.Apply();
+            RenderTexture.active = null;
             RenderTexture.ReleaseTemporary(rt);
             return result;
         }
@@ -319,17 +331,29 @@ namespace TerrainConverter
 
         }
 
-        struct VecInt2
+        struct VecInt3
         {
-            public VecInt2(int x, int y) { this.x = x; this.y = y; }
-            public int x, y;
+            public VecInt3(int x, int y,int z) { this.x = x; this.y = y; this.z = z; }
+            public int x, y, z;
         }
 
-        //2 6 3
-        //5 8 7
-        //0 4 1
-        static void AddVertices(Node node, int i00, int i10, int i01, int i11, List<VecInt2> vertices)
+
+
+        //  45 
+        //3 ** 6
+        //2 ** 7
+        //  10
+        static readonly int[] skirtsOffsets = {
+                1,0,0,0,
+                0,0,0,1,
+                0,1,1,1,
+                1,1,1,0,
+        };
+        static void AddVertices(Node node, int i00, int i10, int i01, int i11, List<VecInt3> vertices)
         {
+            //2 6 3
+            //5 8 7
+            //0 4 1
             node.vertexIndices[0] = i00;
             node.vertexIndices[1] = i10;
             node.vertexIndices[2] = i01;
@@ -340,15 +364,25 @@ namespace TerrainConverter
                 node.vertexIndices[6] = vertices.Count + 2;
                 node.vertexIndices[7] = vertices.Count + 3;
                 node.vertexIndices[8] = vertices.Count + 4;
-                vertices.Add(new VecInt2(node.x + node.size / 2, node.y));
-                vertices.Add(new VecInt2(node.x, node.y + node.size / 2));
-                vertices.Add(new VecInt2(node.x + node.size / 2, node.y + node.size));
-                vertices.Add(new VecInt2(node.x + node.size, node.y + node.size / 2));
-                vertices.Add(new VecInt2(node.x + node.size / 2, node.y + node.size / 2));
+                vertices.Add(new VecInt3(node.x + node.size / 2, node.y, 0));
+                vertices.Add(new VecInt3(node.x, node.y + node.size / 2, 0));
+                vertices.Add(new VecInt3(node.x + node.size / 2, node.y + node.size, 0));
+                vertices.Add(new VecInt3(node.x + node.size, node.y + node.size / 2, 0));
+                vertices.Add(new VecInt3(node.x + node.size / 2, node.y + node.size / 2, 0));
                 AddVertices(node.childs[0], node.vertexIndices[0], node.vertexIndices[4], node.vertexIndices[5], node.vertexIndices[8], vertices);
                 AddVertices(node.childs[1], node.vertexIndices[4], node.vertexIndices[1], node.vertexIndices[8], node.vertexIndices[7], vertices);
                 AddVertices(node.childs[2], node.vertexIndices[5], node.vertexIndices[8], node.vertexIndices[2], node.vertexIndices[6], vertices);
                 AddVertices(node.childs[3], node.vertexIndices[8], node.vertexIndices[7], node.vertexIndices[6], node.vertexIndices[3], vertices);
+            }
+
+
+            for (int dir = 0;dir<4; dir++) {
+                if((node.skirts & (1<<dir)) != 0) {
+                    node.skirtsIndices[dir * 2 + 0] = vertices.Count + 0;
+                    node.skirtsIndices[dir * 2 + 1] = vertices.Count + 1;
+                    vertices.Add(new VecInt3(node.x + node.size * skirtsOffsets[dir * 4 + 0], node.y + node.size * skirtsOffsets[dir * 4 + 1], node.size));
+                    vertices.Add(new VecInt3(node.x + node.size * skirtsOffsets[dir * 4 + 2], node.y + node.size * skirtsOffsets[dir * 4 + 3], node.size));
+                }
             }
         }
 
@@ -361,122 +395,139 @@ namespace TerrainConverter
             return false;
         }
 
-        static void AddIndices(List<int> indices, int[] nodeIndices, int a0, int a1, int a2)
+        static void AddIndices(List<int> indices, int t0, int t1, int t2)
         {
-            indices.Add(nodeIndices[a0]);
-            indices.Add(nodeIndices[a1]);
-            indices.Add(nodeIndices[a2]);
+            indices.Add(t0);
+            indices.Add(t1);
+            indices.Add(t2);
         }
 
-        static void AddIndices(List<int>indices,Node subRoot, int alphaLayer)
+        static void AddNodeIndices(List<int> indices, int[] nodeIndices, int a0, int a1, int a2)
         {
-            //2 6 3
+            AddIndices(indices,nodeIndices[a0], nodeIndices[a1], nodeIndices[a2]);
+        }
+
+
+        // 2 3      2
+        // 0 1    1   3
+        //          0
+        static readonly int[] points = {0,1,8,4,
+                                        2,0,8,5,
+                                        3,2,8,6,
+                                        1,3,8,7};
+        static readonly int[] childIndex = { 1,0,
+                                             0,2,
+                                             2,3,
+                                             3,1};
+        static void AddIndicesByNode(List<int>indices,Node subRoot, int alphaLayer)
+        {
+            //2 6 3 
             //5 8 7
             //0 4 1
-            subRoot.PreorderTraversal((Node node) => {
-                if (node.childs != null) {
-                    //x - 1
-                    if ((node.mergeTriangle & (1 << 1)) != 0 && (node.childs[0].GetValidNum(alphaLayer) > 0 || node.childs[2].GetValidNum(alphaLayer) > 0)) {
-                        AddIndices(indices, node.vertexIndices, 0, 8, 2);
-                    } else {
-                        if (node.childs[0].childs == null && node.childs[0].GetValidNum(alphaLayer) > 0) {
-                            AddIndices(indices, node.vertexIndices, 0, 8, 5);
-                        }
-                        if (node.childs[2].childs == null && node.childs[2].GetValidNum(alphaLayer) > 0) {
-                            AddIndices(indices, node.vertexIndices, 5, 8, 2);
-                        }
-                    }
 
-                    //y - 1
-                    if ((node.mergeTriangle & (1 << 0)) != 0 && (node.childs[0].GetValidNum(alphaLayer) > 0 || node.childs[1].GetValidNum(alphaLayer) > 0)) {
-                        AddIndices(indices, node.vertexIndices, 0, 1, 8);
-                    } else {
-                        if (node.childs[0].childs == null && node.childs[0].GetValidNum(alphaLayer) > 0) {
-                            AddIndices(indices, node.vertexIndices, 0, 4, 8);
-                        }
-                        if (node.childs[1].childs == null && node.childs[1].GetValidNum(alphaLayer) > 0) {
-                            AddIndices(indices, node.vertexIndices, 4, 1, 8);
-                        }
-                    }
 
-                    //x + 1
-                    if ((node.mergeTriangle & (1 << 3)) != 0 && (node.childs[1].GetValidNum(alphaLayer) > 0 || node.childs[3].GetValidNum(alphaLayer) > 0)) {
-                        AddIndices(indices, node.vertexIndices, 1, 3, 8);
-                    } else {
-                        if (node.childs[1].childs == null && node.childs[1].GetValidNum(alphaLayer) > 0) {
-                            AddIndices(indices, node.vertexIndices, 1, 7, 8);
-                        }
-                        if (node.childs[3].childs == null && node.childs[3].GetValidNum(alphaLayer) > 0) {
-                            AddIndices(indices, node.vertexIndices, 7, 3, 8);
-                        }
+            Node node = subRoot;
+            for (int dir = 0; dir < 4; dir++) {
+                Node child0 = node.childs[childIndex[dir * 2]];
+                Node child1 = node.childs[childIndex[dir * 2 + 1]];
+                int p0 = points[dir * 4 + 0];
+                int p1 = points[dir * 4 + 1];
+                int p2 = points[dir * 4 + 2];
+                int p3 = points[dir * 4 + 3];
+                if ((node.mergeTriangle & (1 << dir)) != 0 && (child0.GetValidNum(alphaLayer) > 0 || child1.GetValidNum(alphaLayer) > 0)) {
+                    AddNodeIndices(indices, node.vertexIndices, p0, p1, p2);
+                } else {
+                    if (child0.childs == null && child0.GetValidNum(alphaLayer) > 0) {
+                        AddNodeIndices(indices, node.vertexIndices, p1, p2, p3);
                     }
-                    //y + 1
-                    if ((node.mergeTriangle & (1 << 2)) != 0 && (node.childs[2].GetValidNum(alphaLayer) > 0 || node.childs[3].GetValidNum(alphaLayer) > 0)) {
-                        AddIndices(indices, node.vertexIndices, 3, 2, 8);
-                    } else {
-                        if (node.childs[2].childs == null && node.childs[2].GetValidNum(alphaLayer) > 0) {
-                            AddIndices(indices, node.vertexIndices, 8, 6, 2);
-                        }
-                        if (node.childs[3].childs == null && node.childs[3].GetValidNum(alphaLayer) > 0) {
-                            AddIndices(indices, node.vertexIndices, 8, 3, 6);
-                        }
+                    if (child1.childs == null && child1.GetValidNum(alphaLayer) > 0) {
+                        AddNodeIndices(indices, node.vertexIndices, p0, p3, p2);
                     }
                 }
-            });
+
+                if ((node.mergeTriangle & (1 << dir)) != 0) {
+                    if ((node.skirts & (1 << dir)) != 0) {
+                        //AddIndices(indices, node.vertexIndices[childIndex[dir * 2]], node.vertexIndices[childIndex[dir * 2 + 1]], node.skirtsIndices[dir * 2 + 1]);
+                        //AddIndices(indices, node.vertexIndices[childIndex[dir * 2 + 0]], node.skirtsIndices[dir * 2 + 1], node.skirtsIndices[dir * 2]);
+                    }
+                } else {
+                    if ((child0.skirts & (1 << dir)) != 0) {
+                        //  45 
+                        //3 23 6
+                        //2 01 7
+                        //  10
+                        AddIndices(indices, child0.vertexIndices[childIndex[dir * 2]], child0.vertexIndices[childIndex[dir * 2 + 1]], child0.skirtsIndices[dir * 2 + 1]);
+                        AddIndices(indices, child0.vertexIndices[childIndex[dir * 2 + 0]], child0.skirtsIndices[dir * 2 + 1], child0.skirtsIndices[dir * 2]);
+                    }
+                    if ((child1.skirts & (1 << dir)) != 0) {
+                        AddIndices(indices, child1.vertexIndices[childIndex[dir * 2]], child1.vertexIndices[childIndex[dir * 2 + 1]], child1.skirtsIndices[dir * 2 + 1]);
+                        AddIndices(indices, child1.vertexIndices[childIndex[dir * 2 + 0]], child1.skirtsIndices[dir * 2 + 1], child1.skirtsIndices[dir * 2]);
+                    }
+                }
+            }
+            for(int i =0; i<4; i++) {
+                if (node.childs[i].childs != null) {
+                    AddIndicesByNode(indices, node.childs[i],alphaLayer);
+                }
+            }
         }
 
-        public static Mesh CreateMesh(Node root,TerrainData terrainData,int[]layerIndex)
+        static List<Vector3> vertices = new List<Vector3>(4096);
+        static List<Vector3> normals = new List<Vector3>(4096);
+        static List<Vector2> uvs = new List<Vector2>(4096);
+        static List<VecInt3> intVertices = new List<VecInt3>(4096);
+        static List<int> indices = new List<int>(65536);
+
+        public static Mesh CreateMesh(Node root,TerrainData terrainData,float[,] heights,int[]layerIndex)
         {
             int w = terrainData.heightmapWidth;
             int h = terrainData.heightmapHeight;
-            float[,] heights = terrainData.GetHeights(0, 0, w, h);
             int aw = terrainData.alphamapWidth;
             int ah = terrainData.alphamapHeight;
-            float[,,] alphamaps = terrainData.GetAlphamaps(0, 0, aw, ah);
 
             Node subRoot = root;
 
-            List<Vector3> vertices = new List<Vector3>();
-            List<int> indices = new List<int>();
-            List<Vector3> normals = new List<Vector3>();
-            List<Vector2> uvs = new List<Vector2>();
+            vertices.Clear();
+            normals.Clear();
+            uvs.Clear();
+            intVertices.Clear();
+            indices.Clear();
+            
             Vector3 size = terrainData.size;
-            List<VecInt2> intVertices = new List<VecInt2>();
 
-            intVertices.Add(new VecInt2(subRoot.x, subRoot.y));
-            intVertices.Add(new VecInt2(subRoot.x + subRoot.size, subRoot.y));
-            intVertices.Add(new VecInt2(subRoot.x, subRoot.y + subRoot.size));
-            intVertices.Add(new VecInt2(subRoot.x + subRoot.size, subRoot.y + subRoot.size));
+            intVertices.Add(new VecInt3(subRoot.x, subRoot.y, 0));
+            intVertices.Add(new VecInt3(subRoot.x + subRoot.size, subRoot.y, 0));
+            intVertices.Add(new VecInt3(subRoot.x, subRoot.y + subRoot.size, 0));
+            intVertices.Add(new VecInt3(subRoot.x + subRoot.size, subRoot.y + subRoot.size, 0));
             AddVertices(subRoot, 0, 1, 2, 3, intVertices);
 
             for (int i = 0; i < intVertices.Count; i++) {
                 float y0 = (intVertices[i].x) / (w - 1.0f);
                 float x0 = (intVertices[i].y) / (h - 1.0f);
-                vertices.Add(Vector3.Scale(new Vector3(x0, heights[intVertices[i].x, intVertices[i].y], y0), size));
+                vertices.Add(Vector3.Scale(new Vector3(x0, heights[intVertices[i].x, intVertices[i].y], y0), size) - new Vector3(0,intVertices[i].z * 0.5f,0));
                 normals.Add(terrainData.GetInterpolatedNormal(x0, y0));
                 uvs.Add(new Vector2(x0, y0));
             }
 
-
             Mesh mesh = new Mesh();
-            mesh.vertices = vertices.ToArray();
-            mesh.normals = normals.ToArray();
-            mesh.uv = uvs.ToArray();
+            mesh.SetVertices(vertices);
+            mesh.SetNormals(normals);
+            mesh.SetUVs(0, uvs);
             mesh.subMeshCount = layerIndex.Length;
             for (int i = 0; i < layerIndex.Length; i++) {
                 indices.Clear();
-                AddIndices(indices, subRoot, i == 0 ? -1 : layerIndex[i]);
-                mesh.SetTriangles(indices.ToArray(), i);
+                AddIndicesByNode(indices, subRoot, i == 0 ? -1 : layerIndex[i]);
+                mesh.SetTriangles(indices, i);
             }
             return mesh;
         }
 
-        public static List<MeshInfo> CreateMeshes(Node root , TerrainData terrainData, int gridSize)
+        public static List<MeshInfo> CreateMeshes(Node root , TerrainData terrainData,float[,] heights, int gridSize)
         {
             List<MeshInfo> meshes = new List<MeshInfo>();
             root.TraversalSize(gridSize, (Node _subRoot) => {
                 Node subRoot = _subRoot;
-                Mesh mesh = CreateMesh(subRoot, terrainData,new int[] { 0 });
+                Mesh mesh = CreateMesh(subRoot, terrainData,heights,new int[] { 0 });
                 if (mesh != null) {
                     meshes.Add(new MeshInfo(mesh,subRoot.GetValidNum(0),subRoot.x / subRoot.size,subRoot.y/subRoot.size,0));
                 }

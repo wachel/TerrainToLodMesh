@@ -1,4 +1,6 @@
-﻿Shader "Hidden/BakeBaseTexture"
+﻿// Upgrade NOTE: replaced 'mul(UNITY_MATRIX_MVP,*)' with 'UnityObjectToClipPos(*)'
+
+Shader "Hidden/BakeBaseTexture"
 {
 	Properties
 	{
@@ -32,7 +34,7 @@
 			v2f vert (appdata v)
 			{
 				v2f o;
-				o.vertex = mul(UNITY_MATRIX_MVP, v.vertex);
+				o.vertex = UnityObjectToClipPos(v.vertex);
 				o.uv = v.uv;
 				return o;
 			}
@@ -75,7 +77,7 @@
 			v2f vert (appdata v)
 			{
 				v2f o;
-				o.vertex = mul(UNITY_MATRIX_MVP, v.vertex);
+				o.vertex = UnityObjectToClipPos(v.vertex);
 				o.uv = v.uv * _MainTexST.xy + _MainTexST.zw;
 				o.uv2 = TRANSFORM_TEX(v.uv, _SplatAlpha);
 				return o;

@@ -19,59 +19,24 @@ namespace TerrainConverter
             base.OnInspectorGUI();
             if (converter.terrain) {
                 GUILayout.BeginHorizontal();
-                int gridNum = (converter.terrain.terrainData.heightmapWidth - 1) / converter.gridSize;
-
                 if (GUILayout.Button("生成分层网格")) {
                     converter.trees = new LodNodeTree[converter.maxLodLevel + 1];
                     for (int i= 0; i<=converter.maxLodLevel; i++) {
                         converter.trees[i] = new LodNodeTree();
-                        float error = converter.minError * Mathf.Pow(Mathf.Pow(converter.maxError / converter.minError, 1.0f / (converter.maxLodLevel - 1)), i);
-                        Node tempNode = CreateNode(error);
+                        float error = converter.minError * Mathf.Pow(Mathf.Pow(converter.maxError / converter.minError, 1.0f / (converter.maxLodLevel)), i);
+                        Node tempNode = CreateNode(error,converter.gridSize);
                         List<byte> bytes = new List<byte>();
                         tempNode.ToBytes(bytes);
                         converter.trees[i].tree = bytes;
                         converter.trees[i].alphaLayers = tempNode.GetAlphaBytes();
                     }
 
-                    Node[] nodes = new Node[converter.maxLodLevel + 1];
-                    for(int i= 0; i <= converter.maxLodLevel; i++) {
-                        //Node node = new Node(0, 0, converter.terrain.terrainData.heightmapWidth - 1);
-                        //node.CreateChildFromBytes(converter.trees[0].tree);
-                        //node.SetAlphaBytes(converter.trees[0].alphaLayers);
+                    converter.LoadNodes();
 
-                        float error = converter.minError * Mathf.Pow(Mathf.Pow(converter.maxError / converter.minError, 1.0f / (converter.maxLodLevel - 1)), i);
-                        Node tempNode = CreateNode(error);
-                        nodes[i] = tempNode;
-                    }
+                    converter.ClearChildren();
 
-                    var children = new List<GameObject>();
-                    foreach (Transform child in converter.transform) children.Add(child.gameObject);
-                    children.ForEach(child => DestroyImmediate(child));
-
-                    converter.CreateGridObjects(nodes);
-                    
-                    //List<MeshInfo>[,] meshes = new List<MeshInfo>[gridNum, gridNum];
-                    //for (int i = 0; i < gridNum; i++) {
-                    //    for (int j = 0; j < gridNum; j++) {
-                    //        meshes[i, j] = new List<MeshInfo>();
-                    //    }
-                    //}
-                    //
-                    //{
-                    //    List<MeshInfo> ms = TerrainToMeshTool.CreateMeshes(node, converter.terrain.terrainData, converter.gridSize, -1);
-                    //    foreach (MeshInfo m in ms) {
-                    //        meshes[m.gridX, m.gridY].Add(m);
-                    //    }
-                    //}
-                    //
-                    //for (int l = 0; l < converter.terrain.terrainData.alphamapLayers; l++) {
-                    //    List<MeshInfo> ms = TerrainToMeshTool.CreateMeshes(node,converter.terrain.terrainData,converter.gridSize, l);
-                    //    foreach (MeshInfo m in ms) {
-                    //        meshes[m.gridX, m.gridY].Add(m);
-                    //    }
-                    //}
-                    //
-                    //TerrainToMeshTool.CreateObjects(converter.terrain.terrainData,converter.transform, meshes);
+                    converter.CreateGridObjects();
+                   
                 }
                 GUILayout.EndHorizontal();
             }
@@ -108,7 +73,7 @@ namespace TerrainConverter
                     return false;
                 }
             }
-            if(x + size + size < root.size) {
+            if(x + size < root.size) {
                 Node node = root.FindSizeNode(x + size, y, size);
                 if (node.childs != null && (node.childs[0].childs != null || node.childs[2].childs != null)) {
                     return false;
@@ -121,7 +86,7 @@ namespace TerrainConverter
                     return false;
                 }
             }
-            if (y + size + size < root.size) {
+            if (y + size < root.size) {
                 Node node = root.FindSizeNode(x, y + size, size);
                 if (node.childs != null && (node.childs[0].childs != null || node.childs[1].childs != null)) {
                     return false;
@@ -163,7 +128,7 @@ namespace TerrainConverter
             return false;
         }
 
-        Node CreateNode(float maxError)
+        Node CreateNode(float maxError,int maxSize)
         {
             int w = converter.terrain.terrainData.heightmapWidth;
             int h = converter.terrain.terrainData.heightmapHeight;
@@ -172,7 +137,7 @@ namespace TerrainConverter
             int ah = converter.terrain.terrainData.alphamapHeight;
             float[,,] alphamaps = converter.terrain.terrainData.GetAlphamaps(0, 0, aw, ah);
 
-            Node root = new Node(0, 0, w);
+            Node root = new Node(0, 0, w-1);
             AddNode(root);
 
             //统计不透明的格子数量
@@ -190,14 +155,19 @@ namespace TerrainConverter
             //合并格子
             for (int m = 1; 1 << m < w; m++) {
                 int step = 1 << m;
-                root.TraversalSize(step, (Node node) => {
-                    bool allChildrenIsMerged = node.childs != null && node.childs[0].childs == null && node.childs[1].childs == null && node.childs[2].childs == null && node.childs[3].childs == null;
-                    if (allChildrenIsMerged) {
-                        if (GetHeightError(heights, node.x, node.y, node.size, out node.swapEdge) * converter.terrain.terrainData.size.y < maxError && CheckSourrond(root, node.x, node.y, node.size)) {
-                            node.childs = null;
+                if (step < maxSize) {
+                    root.TraversalSize(step, (Node node) => {
+                        bool allChildrenIsMerged = node.childs != null && node.childs[0].childs == null && node.childs[1].childs == null && node.childs[2].childs == null && node.childs[3].childs == null;
+                        if (allChildrenIsMerged) {
+                            float childErrorSum = node.childs[0].error + node.childs[1].error + node.childs[2].error + node.childs[3].error;
+                            float error = childErrorSum* 0.3f + GetHeightError(heights, node.x, node.y, node.size, out node.swapEdge) * converter.terrain.terrainData.size.y;
+                            if (error < maxError && CheckSourrond(root, node.x, node.y, node.size)) {
+                                node.error = error;
+                                node.childs = null;
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
 
             //为了消除T接缝，如果相邻格子比自己大，则靠近大格子的两个三角形要合并为一个
